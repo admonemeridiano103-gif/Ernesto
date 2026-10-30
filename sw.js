@@ -2,7 +2,7 @@
    Estrategia: "cache first" para todo el app shell → abre al instante y 100% offline.
    Para publicar una versión nueva basta con cambiar VERSION: el navegador detecta el
    cambio, descarga en segundo plano y la app muestra el aviso "Actualizar". */
-const VERSION = 'v2.0.0';
+const VERSION = 'v3.0.0';
 const CACHE = 'mi-closet-' + VERSION;
 const SHELL = [
   './',

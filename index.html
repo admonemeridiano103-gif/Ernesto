@@ -141,6 +141,16 @@ textarea.inp{height:70px;padding:10px 12px;resize:vertical}
 .nav .nb.dot{min-width:10px;width:10px;height:10px;padding:0;top:8px;left:calc(50% + 10px);background:var(--wa)}
 .ok-line{color:var(--ok);font-weight:700}.wa-line{color:var(--wa);font-weight:700}
 ol.how{margin:6px 0 4px;padding-left:20px;color:var(--mu);font-size:14px}ol.how li{margin:4px 0}
+.th{width:46px;height:46px;flex:0 0 46px;border-radius:10px;object-fit:cover;background:var(--card2);cursor:zoom-in}
+.cimg{width:40px;height:40px;border-radius:10px;object-fit:cover;flex:0 0 40px}
+.fbox{display:flex;gap:10px;align-items:center}
+.fprev{width:84px;height:84px;flex:0 0 84px;border-radius:12px;background:var(--card2);display:flex;align-items:center;justify-content:center;font-size:30px;color:var(--mu);overflow:hidden;border:1px dashed var(--bd)}
+.fprev img{width:100%;height:100%;object-fit:cover}
+.fbtns{display:flex;flex-direction:column;gap:6px;flex:1}
+.fbtns button{height:38px;border-radius:10px;background:var(--card2);font-size:13px;font-weight:700;text-align:left;padding:0 12px}
+.fbtns button.dg{background:var(--baS);color:var(--ba)}
+.viewer img{width:100%;border-radius:14px;display:block;background:#000}
+.chk{display:flex;align-items:center;gap:10px;font-size:14px;margin:4px 0 10px}.chk input{width:22px;height:22px}
 .hide{display:none!important}
 @media (min-width:760px){main,.hdr>.in{max-width:760px;margin:0 auto}.sheet{max-width:620px;margin:0 auto}.toast{max-width:520px;margin:0 auto}}
 </style>
@@ -170,6 +180,8 @@ ol.how{margin:6px 0 4px;padding-left:20px;color:var(--mu);font-size:14px}ol.how 
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grab"></div><div id="sheetBody"></div></div>
 <div class="toast" id="toast"><span id="toastTx"></span><button id="toastBtn">Deshacer</button></div>
 <input type="file" id="fileIn" accept="application/json,.json" class="hide">
+<input type="file" id="camIn" accept="image/*" capture="environment" class="hide">
+<input type="file" id="galIn" accept="image/*" class="hide">
 
 <script>
 'use strict';
@@ -475,19 +487,22 @@ const DB={db:null,mode:'idb',
     let done=false;const fb=()=>{if(done)return;done=true;this.mode='ls';res()};
     try{
       if(!window.indexedDB)return fb();
-      const r=indexedDB.open('closet_inventario',1);
-      r.onupgradeneeded=()=>{const d=r.result;[['items','id'],['conts','id'],['movs','id'],['meta','k']].forEach(([s,k])=>{if(!d.objectStoreNames.contains(s))d.createObjectStore(s,{keyPath:k})})};
-      r.onsuccess=()=>{if(done)return;done=true;this.db=r.result;res()};
-      r.onerror=fb;r.onblocked=fb;setTimeout(fb,2500);
+      const r=indexedDB.open('closet_inventario',2); // v2: agrega el almacén de fotos
+      r.onupgradeneeded=()=>{const d=r.result;[['items','id'],['conts','id'],['movs','id'],['meta','k'],['fotos','id']].forEach(([s,k])=>{if(!d.objectStoreNames.contains(s))d.createObjectStore(s,{keyPath:k})})};
+      r.onsuccess=()=>{if(done)return;done=true;clearTimeout(tm);this.db=r.result;this.db.onversionchange=()=>{this.db.close();toast('Hay una versión nueva abierta en otra pestaña. Recarga esta.',null,'wa')};res()};
+      // si otra pestaña con la versión anterior bloquea la actualización, esperamos (no se cambia de almacenamiento)
+      r.onblocked=()=>{clearTimeout(tm);toast('Cierra las otras pestañas de la app para terminar de actualizar',null,'wa')};
+      r.onerror=fb;const tm=setTimeout(fb,4000);
     }catch(e){fb()}
   })},
   all(st){if(this.mode==='ls')return Promise.resolve(lsGet('ci_'+st,st==='meta'?[]:[]));
     return new Promise((res,rej)=>{const q=this.db.transaction(st).objectStore(st).getAll();q.onsuccess=()=>res(q.result);q.onerror=()=>rej(q.error)})},
-  _ls(st){const src={items:S.items.map(clean),conts:S.conts,movs:S.movs,meta:Object.entries(S.meta).map(([k,v])=>({k,v}))}[st];lsSet('ci_'+st,src)},
+  _ls(st){const src={items:S.items.map(clean),conts:S.conts,movs:S.movs,meta:Object.entries(S.meta).map(([k,v])=>({k,v}))}[st];if(src)lsSet('ci_'+st,src)},
   tx(st,fn){if(this.mode==='ls'){this._ls(st);return Promise.resolve()}
     return new Promise((res,rej)=>{const t=this.db.transaction(st,'readwrite');const os=t.objectStore(st);fn(os);t.oncomplete=()=>res();t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error)}).catch(e=>{toast('No se pudo guardar: '+(e&&e.message||e),null,'ba')})},
   put(st,objs){objs=[].concat(objs);return this.tx(st,os=>objs.forEach(o=>os.put(st==='items'?clean(o):o)))},
   del(st,id){return this.tx(st,os=>os.delete(id))},
+  get(st,id){if(this.mode==='ls')return Promise.resolve(null);return new Promise((res,rej)=>{const q=this.db.transaction(st).objectStore(st).get(id);q.onsuccess=()=>res(q.result||null);q.onerror=()=>rej(q.error)})},
   clear(st){return this.tx(st,os=>os.clear())}
 };
 const saveItem=it=>DB.put('items',it);
@@ -503,10 +518,54 @@ async function load(){
   S.col=lsGet('ci_col',{});
   const ui=lsGet('ci_ui',{});if(NIVELES.includes(ui.nivel))S.nivel=ui.nivel;
   try{if(navigator.storage&&navigator.storage.persist)S.persisted=await navigator.storage.persist()}catch(e){}
+  await loadThumbs();
 }
+
+/* ---------- Fotos (opcionales): se guardan comprimidas en el teléfono, nunca se suben ---------- */
+const FOTO={urls:new Map(),pend:{},key:null,cb:null};
+const fkey=(tipo,id)=>tipo+':'+id;
+const fotoOK=()=>DB.mode==='idb';
+async function loadThumbs(){if(!fotoOK())return;try{const all=await DB.all('fotos');for(const f of all)if(f&&f.thumb)FOTO.urls.set(f.id,URL.createObjectURL(f.thumb))}catch(e){}}
+async function shrink(file,max,q){
+  let src,url=null;
+  try{src=await createImageBitmap(file,{imageOrientation:'from-image'})}
+  catch(e){url=URL.createObjectURL(file);src=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error('Imagen no válida'));i.src=url})}
+  const w=src.width,h=src.height,k=Math.min(1,max/Math.max(w,h));const c=document.createElement('canvas');c.width=Math.max(1,Math.round(w*k));c.height=Math.max(1,Math.round(h*k));
+  c.getContext('2d').drawImage(src,0,0,c.width,c.height);if(url)URL.revokeObjectURL(url);if(src.close)src.close();
+  return new Promise((res,rej)=>c.toBlob(b=>b?res(b):rej(new Error('No se pudo procesar la foto')),'image/jpeg',q));
+}
+async function setFoto(key,file){
+  const full=await shrink(file,1280,0.72),thumb=await shrink(file,240,0.7);
+  await DB.put('fotos',{id:key,full,thumb,ts:Date.now()});
+  if(FOTO.urls.has(key))URL.revokeObjectURL(FOTO.urls.get(key));FOTO.urls.set(key,URL.createObjectURL(thumb));
+}
+async function delFoto(key){if(!FOTO.urls.has(key))return;await DB.del('fotos',key);URL.revokeObjectURL(FOTO.urls.get(key));FOTO.urls.delete(key)}
+async function applyPend(p,key){const pd=FOTO.pend[p];delete FOTO.pend[p];if(!pd||!fotoOK())return;try{if(pd.file)await setFoto(key,pd.file);else if(pd.remove)await delFoto(key)}catch(e){toast('No se pudo guardar la foto: '+e.message,null,'ba')}if(pd.url)URL.revokeObjectURL(pd.url)}
+function fotoField(p,key){
+  if(!fotoOK())return '<div class="fld"><label>Foto (opcional)</label><p style="font-size:13px;color:var(--mu);margin:0">Las fotos no están disponibles en este navegador.</p></div>';
+  const pd=FOTO.pend[p];const src=pd&&pd.url?pd.url:(pd&&pd.remove?null:(key&&FOTO.urls.get(key)));
+  return `<div class="fld"><label>Foto (opcional)</label><div class="fbox"><div class="fprev" id="${p}fprev">${src?`<img src="${src}" alt="">`:'📷'}</div><div class="fbtns"><button type="button" data-foto="cam" data-p="${p}">📷 Tomar foto</button><button type="button" data-foto="gal" data-p="${p}">🖼 Elegir de galería</button><button type="button" class="dg ${src?'':'hide'}" data-foto="del" data-p="${p}" id="${p}fdel">Quitar foto</button></div></div></div>`;
+}
+function onFotoBtn(b){
+  const p=b.dataset.p,act=b.dataset.foto;
+  if(act==='del'){const pd=FOTO.pend[p];if(pd&&pd.url)URL.revokeObjectURL(pd.url);FOTO.pend[p]={remove:true};paintPrev(p);return}
+  FOTO.cb=f=>{const pd=FOTO.pend[p];if(pd&&pd.url)URL.revokeObjectURL(pd.url);FOTO.pend[p]={file:f,url:URL.createObjectURL(f)};paintPrev(p)};
+  (act==='cam'?$('#camIn'):$('#galIn')).click();
+}
+function paintPrev(p){const pd=FOTO.pend[p]||{};const box=document.getElementById(p+'fprev');if(!box)return;box.innerHTML=pd.url?`<img src="${pd.url}" alt="">`:'📷';const d=document.getElementById(p+'fdel');if(d)d.classList.toggle('hide',!pd.url)}
+['#camIn','#galIn'].forEach(sel=>document.querySelector(sel).addEventListener('change',e=>{const f=e.target.files[0];e.target.value='';if(f&&FOTO.cb)FOTO.cb(f);FOTO.cb=null}));
+async function verFoto(key,title,sub){
+  const rec=await DB.get('fotos',key);if(!rec){toast('La foto ya no existe',null,'wa');return}
+  const u=URL.createObjectURL(rec.full);
+  openSheet(`<div class="viewer"><h3>${esc(title)}</h3>${sub?`<p class="meta" style="padding:0 0 10px">${sub}</p>`:''}<img src="${u}" alt=""><p class="meta" style="padding:8px 0 12px">Foto del ${new Date(rec.ts).toLocaleDateString('es-MX')} · ${Math.round(rec.full.size/1024)} KB</p><button class="btn" id="vfClose">Cerrar</button></div>`);
+  $('#vfClose').onclick=()=>closeSheet();setTimeout(()=>URL.revokeObjectURL(u),120000);
+}
+const blobToDataURL=b=>new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=()=>rej(fr.error);fr.readAsDataURL(b)});
+const dataURLToBlob=async d=>(await fetch(d)).blob();
 async function seedAll(){
   const sd=buildSeed();S.conts=sd.conts;reindexConts();S.items=sd.items.map(mkItem);S.movs=[];
   await DB.clear('items');await DB.clear('conts');await DB.clear('movs');
+  if(fotoOK()){await DB.clear('fotos');FOTO.urls.forEach(u=>URL.revokeObjectURL(u));FOTO.urls.clear()}
   await DB.put('conts',S.conts);await DB.put('items',S.items);await setMeta('seeded',SEED_VERSION);
 }
 
@@ -539,7 +598,8 @@ function rowHtml(it,ctx,toks){
   if(it.notas)sub+=' · '+esc(it.notas);
   const q=`<span class="qty ${cons?st:(st==='ba'?'ba':'h')}">${fmt(it.cantidad)}<small>${esc(it.unidad)}</small></span>`;
   const ctrl=cons?`<button class="qb" data-act="dec" aria-label="Consumir 1">−</button>${q}<button class="qb plus" data-act="inc" aria-label="Agregar 1">+</button>`:q;
-  return `<div class="it ${cons||st==='ba'?st:''}" data-id="${it.id}" data-ctx="${ctx}"><button class="it-main" data-act="edit"><span class="it-name">${hl(it,toks)}</span><span class="it-sub">${sub}</span></button><div class="ctrl">${ctrl}</div></div>`;
+  const th=FOTO.urls.get(fkey('item',it.id));
+  return `<div class="it ${cons||st==='ba'?st:''}" data-id="${it.id}" data-ctx="${ctx}">${th?`<img class="th" src="${th}" alt="" data-act="vfi" loading="lazy">`:''}<button class="it-main" data-act="edit"><span class="it-name">${hl(it,toks)}</span><span class="it-sub">${sub}</span></button><div class="ctrl">${ctrl}</div></div>`;
 }
 function passFiltro(it){switch(S.filtro){case 'herr':return it.categoria==='herramienta';case 'cons':return it.categoria==='consumible';case 'rep':return needsBuy(it);case 'uso':return it.en_uso;default:return true}}
 const byName=(a,b)=>a.nombre.localeCompare(b.nombre,'es',{numeric:true});
@@ -561,7 +621,7 @@ function contHtml(c){
   if(S.filtro!=='todos'&&!its.length&&!kids)return '';
   const ba=all.filter(i=>i.estado_stock==='Agotado').length,wa=all.filter(i=>i.estado_stock==='Por agotarse').length;
   const k=c.id,col=S.filtro==='todos'&&S.col[k];
-  return `<section class="cont ${col?'col':''}" data-cid="${k}"><button class="cont-h" data-act="toggle"><span class="em">${TIPOS[c.tipo]||'📦'}</span><span class="t">${esc(c.nombre)}<small>${c.tipo}${c.padre?' dentro de '+esc(c.padre):''} · ${all.length} artículo${all.length===1?'':'s'}</small></span>${ba?`<span class="bdg ba">${ba}</span>`:''}${wa?`<span class="bdg wa">${wa}</span>`:''}<span class="addin" data-act="addin" role="button" aria-label="Agregar aquí" style="display:flex;align-items:center;justify-content:center">+</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg></button><div class="cont-b">${its.map(i=>rowHtml(i,'c')).join('')}${!all.length?'<div class="empty">Vacío. Toca <b>+</b> para agregar artículos aquí.</div>':''}${kids}</div></section>`;
+  return `<section class="cont ${col?'col':''}" data-cid="${k}"><button class="cont-h" data-act="toggle">${FOTO.urls.has(fkey('cont',c.id))?`<img class="cimg" src="${FOTO.urls.get(fkey('cont',c.id))}" alt="" data-act="vfc">`:`<span class="em">${TIPOS[c.tipo]||'📦'}</span>`}<span class="t">${esc(c.nombre)}<small>${c.tipo}${c.padre?' dentro de '+esc(c.padre):''} · ${all.length} artículo${all.length===1?'':'s'}</small></span>${ba?`<span class="bdg ba">${ba}</span>`:''}${wa?`<span class="bdg wa">${wa}</span>`:''}<span class="addin" data-act="addin" role="button" aria-label="Agregar aquí" style="display:flex;align-items:center;justify-content:center">+</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg></button><div class="cont-b">${its.map(i=>rowHtml(i,'c')).join('')}${!all.length?'<div class="empty">Vacío. Toca <b>+</b> para agregar artículos aquí.</div>':''}${kids}</div></section>`;
 }
 function renderInv(){
   const v=$('#view'),meta=$('#meta');
@@ -609,7 +669,7 @@ function renderRep(){
   $('#meta').classList.add('hide');
   const L=S.items.filter(needsBuy).sort((a,b)=>(a.estado_stock==='Agotado'?0:1)-(b.estado_stock==='Agotado'?0:1)||NIVELES.indexOf(a.nivel)-NIVELES.indexOf(b.nivel)||byName(a,b));
   if(!L.length){$('#view').innerHTML='<div class="card"><h2>🛒 Lista de compras</h2><p>Todo en orden: ningún material está por debajo de su stock mínimo.</p></div>';return}
-  const sec=(tit,arr)=>arr.length?`<div class="grp">${tit} (${arr.length})</div><div class="cont">${arr.map(it=>`<div class="it ${STC[it.estado_stock]}" data-id="${it.id}"><button class="it-main" data-act="edit"><span class="it-name">${esc(it.nombre)}</span><span class="it-sub">${locTxt(it)} · tienes ${fmt(it.cantidad)} · mín ${fmt(it.stock_minimo)} · <b>comprar ${fmt(sugerido(it))} ${esc(it.unidad)}</b></span></button><div class="ctrl"><button class="sm ok" data-act="comprado">✓ Comprado</button></div></div>`).join('')}</div>`:'';
+  const sec=(tit,arr)=>arr.length?`<div class="grp">${tit} (${arr.length})</div><div class="cont">${arr.map(it=>`<div class="it ${STC[it.estado_stock]}" data-id="${it.id}">${FOTO.urls.has(fkey('item',it.id))?`<img class="th" src="${FOTO.urls.get(fkey('item',it.id))}" alt="" data-act="vfi">`:''}<button class="it-main" data-act="edit"><span class="it-name">${esc(it.nombre)}</span><span class="it-sub">${locTxt(it)} · tienes ${fmt(it.cantidad)} · mín ${fmt(it.stock_minimo)} · <b>comprar ${fmt(sugerido(it))} ${esc(it.unidad)}</b></span></button><div class="ctrl"><button class="sm ok" data-act="comprado">✓ Comprado</button></div></div>`).join('')}</div>`:'';
   $('#view').innerHTML=`<div class="card"><h2>🛒 Lista de compras · ${L.length}</h2><p>Se arma sola con todo lo que está agotado, por debajo del mínimo o marcado “en lista”.</p>
   <div class="btns"><button class="btn ok" data-act="wa">WhatsApp</button><button class="btn" data-act="share">Compartir</button></div>
   <div class="btns"><button class="btn" data-act="copy">Copiar texto</button><button class="btn" data-act="txt">Descargar .txt</button></div></div>
@@ -630,7 +690,7 @@ function listaTexto(){
 function altaDefaults(o){S.alta=Object.assign({nombre:'',categoria:'herramienta',nivel:S.nivel,contenedor:'',cantidad:1,stock_minimo:1,unidad:'Pza',notas:''},S.alta||{},o||{});const cs=contsDe(S.alta.nivel);if(!cs.some(c=>c.nombre===S.alta.contenedor))S.alta.contenedor=(cs[0]||{}).nombre||'Suelto'}
 function contsDe(nivel){return S.conts.filter(c=>c.nivel===nivel).sort((a,b)=>a.orden-b.orden)}
 function contOptions(nivel,sel){return contsDe(nivel).map(c=>`<option value="${esc(c.nombre)}" ${c.nombre===sel?'selected':''}>${TIPOS[c.tipo]||''} ${c.padre?esc(c.padre)+' › ':''}${esc(c.nombre)}</option>`).join('')+'<option value="__new">＋ Nuevo contenedor…</option>'}
-function itemForm(p,o){
+function itemForm(p,o,key){
   const cons=o.categoria==='consumible';const im=o.unidad==='Metros'?'decimal':'numeric';
   return `<div class="fld"><label>Nombre</label><input class="inp" id="${p}nombre" value="${esc(o.nombre)}" placeholder="Ej. Disco de corte 4&quot;" autocomplete="off" enterkeyhint="done"></div>
   <div class="fld"><label>Tipo</label><div class="seg" id="${p}cat"><button data-v="herramienta" class="${!cons?'on':''}">🔧 Herramienta</button><button data-v="consumible" class="${cons?'on':''}">🧪 Material / Consumible</button></div></div>
@@ -639,7 +699,8 @@ function itemForm(p,o){
   <div class="fld"><label>Cantidad</label><div class="step"><button class="qb" type="button" data-step="${p}cantidad" data-d="-1">−</button><input class="inp" id="${p}cantidad" type="number" inputmode="${im}" pattern="[0-9]*" min="0" step="any" value="${fmt(o.cantidad)}"><button class="qb plus" type="button" data-step="${p}cantidad" data-d="1">+</button></div></div>
   <div class="fld"><label>Unidad</label><div class="pills" id="${p}unidad">${UNIDADES.map(u=>`<button data-v="${u}" class="${o.unidad===u?'on':''}">${u}</button>`).join('')}</div></div>
   <div class="fld ${cons?'':'hide'}" id="${p}minw"><label>Stock mínimo (alerta ⚠️ cuando la cantidad sea ≤ a este número)</label><div class="step"><button class="qb" type="button" data-step="${p}min" data-d="-1">−</button><input class="inp" id="${p}min" type="number" inputmode="numeric" pattern="[0-9]*" min="0" step="any" value="${fmt(o.stock_minimo)}"><button class="qb plus" type="button" data-step="${p}min" data-d="1">+</button></div></div>
-  <div class="fld"><label>Notas (opcional)</label><input class="inp" id="${p}notas" value="${esc(o.notas)}" placeholder="Medida, marca, estado…"></div>`;
+  <div class="fld"><label>Notas (opcional)</label><input class="inp" id="${p}notas" value="${esc(o.notas)}" placeholder="Medida, marca, estado…"></div>
+  ${fotoField(p,key)}`;
 }
 function readForm(p){
   const g=id=>document.getElementById(p+id);const on=id=>{const b=g(id).querySelector('.on');return b?b.dataset.v:''};
@@ -670,6 +731,7 @@ function doAlta(more){
   if(f.contenedor==='__new'||!CIDX.has(ckey(f.nivel,f.contenedor))){toast('Elige un contenedor',null,'wa');return}
   if(f.categoria!=='consumible')f.stock_minimo=0;
   const it=mkItem(f);S.items.push(it);saveItem(it);logMov(it,'alta',it.cantidad);
+  const hadFoto=!!(FOTO.pend.a_&&FOTO.pend.a_.file);applyPend('a_',fkey('item',it.id)).then(()=>{if(hadFoto&&S.view==='inv')renderInv()});
   badges();toast(`Guardado: ${it.nombre} → ${CORTO[it.nivel]} › ${it.contenedor}`);
   if(more){S.alta=Object.assign(f,{nombre:'',cantidad:1,notas:''});renderAlta();setTimeout(()=>$('#a_nombre').focus(),30)}
   else{S.alta=null;S.nivel=it.nivel;go('inv');setTimeout(()=>{const el=document.querySelector(`.it[data-id="${it.id}"]`);if(el)el.scrollIntoView({block:'center'})},60)}
@@ -684,16 +746,20 @@ function renderMas(){
   const bk=backupDue();
   $('#view').innerHTML=`${appCard()}
   <div class="card"><h2>💾 Copia de seguridad</h2>${bk.due?`<p class="wa-line">⚠️ Tienes ${bk.n} cambio${bk.n===1?'':'s'} sin respaldar. Descarga un respaldo.</p>`:''}<p>Los datos viven solo en este navegador. Descarga un respaldo cada vez que hagas cambios grandes y guárdalo en Drive o WhatsApp.</p>
+   ${FOTO.urls.size?`<label class="chk"><input type="checkbox" id="bkFotos" checked> Incluir las ${FOTO.urls.size} foto${FOTO.urls.size===1?'':'s'} (archivo más pesado)</label>`:''}
    <button class="btn pr" data-act="exp">Descargar respaldo JSON</button><button class="btn" data-act="imp">Cargar respaldo JSON</button>
    <p style="margin-top:10px;font-size:12px">Último respaldo: ${S.meta.lastBackup?new Date(S.meta.lastBackup).toLocaleString('es-MX'):'nunca'}${bk.n&&!bk.due?` · ${bk.n} cambio(s) desde entonces`:''}<br>¿Vienes de la versión de archivo (Iteración 1)? Allá toca <b>Descargar respaldo JSON</b> y aquí <b>Cargar respaldo JSON</b>.</p></div>
-  <div class="card"><h2>📊 Resumen</h2><p>${S.items.length} artículos (${S.items.length-cons} herramientas, ${cons} consumibles) · ${S.conts.length} contenedores · ${st.rep} por reponer (${st.ba} agotados).<br>Almacenamiento: ${DB.mode==='idb'?'IndexedDB':'localStorage'}${S.persisted?' · persistente ✔':''}</p></div>
+  <div class="card"><h2>📊 Resumen</h2><p>${S.items.length} artículos (${S.items.length-cons} herramientas, ${cons} consumibles) · ${S.conts.length} contenedores · ${st.rep} por reponer (${st.ba} agotados).<br>Almacenamiento: ${DB.mode==='idb'?'IndexedDB':'localStorage'}${S.persisted?' · persistente ✔':''} · 📷 ${FOTO.urls.size} foto${FOTO.urls.size===1?'':'s'}<span id="stUse"></span></p></div>
   <div class="card"><h2>🗂 Contenedores</h2>${NIVELES.map(n=>`<div class="grp" style="padding-left:0">${n}</div>${contsDe(n).map(c=>`<div class="lrow"><div class="x"><b>${TIPOS[c.tipo]||''} ${esc(c.nombre)}</b><span>${c.tipo}${c.padre?' · dentro de '+esc(c.padre):''} · ${itemsIn(c).length} artículos</span></div><button class="sm" data-act="cedit" data-cid="${c.id}">Editar</button></div>`).join('')}<button class="sm pr" data-act="cnew" data-nivel="${n}" style="margin:6px 0 4px">＋ Contenedor en ${CORTO[n]}</button>`).join('')}</div>
   <div class="card"><h2>🕘 Últimos movimientos</h2>${last.length?last.map(m=>`<div class="mv"><time>${new Date(m.ts).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</time><span><b>${T[m.tipo]||m.tipo}</b> ${m.delta?`(${m.delta>0?'+':''}${fmt(m.delta)}) `:''}${esc(m.nombre)} <span style="color:var(--mu)">→ ${fmt(m.final)}</span></span></div>`).join(''):'<p>Aún no hay movimientos.</p>'}</div>
   <div class="card"><h2>⚠️ Zona de cuidado</h2><p>Borra todo y vuelve a cargar el inventario inicial precargado.</p><button class="btn dg" data-act="reset">Restaurar inventario inicial</button></div>
-  <p class="meta" style="text-align:center">Inventario del Clóset · v${APP_VERSION} · Iteración 2</p>`;
+  <p class="meta" style="text-align:center">Inventario del Clóset · v${APP_VERSION} · Iteración 3</p>`;
+  try{navigator.storage.estimate().then(e=>{const el=$('#stUse');if(el&&e&&e.usage!=null)el.textContent=` · ${(e.usage/1048576).toFixed(1)} MB usados`}).catch(()=>{})}catch(e){}
 }
-function exportJSON(){
-  const data={app:'closet-inventario',version:1,exportado:new Date().toISOString(),contenedores:S.conts,items:S.items.map(clean),movimientos:S.movs};
+async function exportJSON(){
+  const data={app:'closet-inventario',version:2,exportado:new Date().toISOString(),contenedores:S.conts,items:S.items.map(clean),movimientos:S.movs};
+  const cb=$('#bkFotos');
+  if(cb&&cb.checked&&fotoOK()){toast('Preparando respaldo con fotos…');try{const fs=await DB.all('fotos');data.fotos=await Promise.all(fs.map(async f=>({id:f.id,ts:f.ts,full:await blobToDataURL(f.full),thumb:await blobToDataURL(f.thumb)})))}catch(e){toast('No se pudieron incluir las fotos: '+e.message,null,'ba')}}
   const d=new Date(),f=`respaldo_closet_${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}.json`;
   download(f,JSON.stringify(data,null,1),'application/json');setMeta('lastBackup',Date.now());toast('Respaldo descargado: '+f);if(S.view==='mas')renderMas();
 }
@@ -709,7 +775,10 @@ async function importJSON(file){
     S.items=items.map(o=>prep({id:o.id||uid(),nombre:String(o.nombre),categoria:o.categoria==='consumible'?'consumible':'herramienta',nivel:o.nivel,contenedor:o.contenedor||'Suelto',cantidad:+o.cantidad||0,stock_minimo:+o.stock_minimo||0,unidad:UNIDADES.includes(o.unidad)?o.unidad:'Pza',estado_stock:'OK',notas:o.notas||'',en_uso:!!o.en_uso,en_lista:!!o.en_lista,creado:o.creado||Date.now(),actualizado:o.actualizado||Date.now()}));
     S.movs=Array.isArray(data.movimientos)?data.movimientos.filter(m=>m&&m.id&&m.ts):[];
     await DB.clear('items');await DB.clear('conts');await DB.clear('movs');await DB.put('conts',S.conts);await DB.put('items',S.items);await DB.put('movs',S.movs);await setMeta('seeded',SEED_VERSION);
-    toast(`Respaldo cargado: ${S.items.length} artículos`);badges();render();
+    let nf=0;
+    if(fotoOK()){await DB.clear('fotos');FOTO.urls.forEach(u=>URL.revokeObjectURL(u));FOTO.urls.clear();
+      if(Array.isArray(data.fotos)){for(const f of data.fotos){try{if(!f||!f.id||!f.full)continue;const full=await dataURLToBlob(f.full),thumb=f.thumb?await dataURLToBlob(f.thumb):full;await DB.put('fotos',{id:f.id,full,thumb,ts:f.ts||Date.now()});FOTO.urls.set(f.id,URL.createObjectURL(thumb));nf++}catch(e){}}}}
+    toast(`Respaldo cargado: ${S.items.length} artículos${nf?` y ${nf} fotos`:''}`);badges();render();
   });
 }
 
@@ -725,22 +794,23 @@ function confirmSheet(title,text,okLabel,fn,danger=true){
 }
 function editSheet(id,draft){
   const it=byId(id);if(!it)return;
-  openSheet(`<h3>Editar artículo</h3>${itemForm('e_',Object.assign({},it,draft||{}))}
+  if(!draft){const pd=FOTO.pend.e_;if(pd&&pd.url)URL.revokeObjectURL(pd.url);delete FOTO.pend.e_}
+  openSheet(`<h3>Editar artículo</h3>${itemForm('e_',Object.assign({},it,draft||{}),fkey('item',it.id))}
    <div class="fld"><div class="seg"><button id="e_uso" class="${it.en_uso?'on':''}">${it.en_uso?'↙ Marcar devuelta':'↗ Marcar en uso / prestada'}</button><button id="e_lista" class="${it.en_lista?'on':''}">${it.en_lista?'🛒 Quitar de la lista':'🛒 Agregar a lista'}</button></div></div>
    <button class="btn pr" id="e_save">Guardar cambios</button><div class="btns"><button class="btn" id="e_cancel">Cancelar</button><button class="btn dg" id="e_del">Eliminar</button></div>
    <p class="meta" style="padding:10px 0 0">Alta: ${new Date(it.creado).toLocaleDateString('es-MX')} · Última modificación: ${new Date(it.actualizado).toLocaleString('es-MX')}</p>`);
   const root=$('#sheetBody');wireForm('e_',root,d=>editSheet(id,d));
-  $('#e_cancel').onclick=()=>closeSheet();
+  $('#e_cancel').onclick=()=>{delete FOTO.pend.e_;closeSheet()};
   $('#e_uso').onclick=()=>{it.en_uso=!it.en_uso;it.actualizado=Date.now();prep(it);saveItem(it);logMov(it,it.en_uso?'prestamo':'devolucion',0);closeSheet();refresh();toast(it.en_uso?`${it.nombre}: en uso`:`${it.nombre}: devuelta a su lugar`)};
   $('#e_lista').onclick=()=>{it.en_lista=!it.en_lista;it.actualizado=Date.now();saveItem(it);closeSheet();refresh();toast(it.en_lista?'Agregado a la lista de compras':'Quitado de la lista de compras')};
-  $('#e_del').onclick=()=>confirmSheet('Eliminar artículo',`¿Eliminar “${it.nombre}” del inventario?`,'Eliminar',()=>{S.items=S.items.filter(x=>x!==it);DB.del('items',it.id);logMov(it,'baja',-it.cantidad);refresh();toast('Artículo eliminado')});
+  $('#e_del').onclick=()=>confirmSheet('Eliminar artículo',`¿Eliminar “${it.nombre}” del inventario?`,'Eliminar',()=>{S.items=S.items.filter(x=>x!==it);DB.del('items',it.id);delFoto(fkey('item',it.id));logMov(it,'baja',-it.cantidad);refresh();toast('Artículo eliminado')});
   $('#e_save').onclick=()=>{
     const f=readForm('e_');if(!f.nombre){toast('El nombre no puede ir vacío',null,'wa');return}
     if(f.contenedor==='__new'||!CIDX.has(ckey(f.nivel,f.contenedor))){toast('Elige un contenedor',null,'wa');return}
     if(f.categoria!=='consumible')f.stock_minimo=0;
     const prev=it.cantidad;Object.assign(it,f,{actualizado:Date.now()});prep(it);saveItem(it);
     if(prev!==it.cantidad)logMov(it,'ajuste',it.cantidad-prev);
-    closeSheet();refresh();toast('Cambios guardados');
+    closeSheet();applyPend('e_',fkey('item',it.id)).then(()=>{refresh();toast('Cambios guardados')});
   };
 }
 function compradoSheet(id){
@@ -755,19 +825,21 @@ function compradoSheet(id){
 function contEditor(cid,nivel,after,opts){
   const nested=!!(opts&&opts.nested),onCancel=opts&&opts.onCancel;
   const c=cid?S.conts.find(x=>x.id===cid):null;const nv=c?c.nivel:nivel;
+  {const pd=FOTO.pend.c_;if(pd&&pd.url)URL.revokeObjectURL(pd.url);delete FOTO.pend.c_}
   const padres=S.conts.filter(x=>x.nivel===nv&&!x.padre&&(!c||x.id!==c.id)&&x.tipo!=='Suelto');
   const html=`<h3>${c?'Editar':'Nuevo'} contenedor</h3>
    <div class="fld"><label>Nombre exacto</label><input class="inp" id="c_nombre" value="${esc(c?c.nombre:'')}" placeholder="Ej. Maleta PRETUL 3" autocomplete="off"></div>
    <div class="fld"><label>Tipo</label><div class="pills" id="c_tipo">${Object.keys(TIPOS).map(t=>`<button data-v="${t}" class="${(c?c.tipo:'Caja')===t?'on':''}">${TIPOS[t]} ${t}</button>`).join('')}</div></div>
    <div class="fld"><label>Nivel</label><div class="pills" id="c_nivel">${NIVELES.map(n=>`<button data-v="${n}" class="${nv===n?'on':''}">${CORTO[n]}</button>`).join('')}</div></div>
    <div class="fld"><label>¿Va dentro de otro contenedor? (opcional)</label><select class="inp" id="c_padre"><option value="">— No, va directo en el estante —</option>${padres.map(p=>`<option ${c&&c.padre===p.nombre?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select></div>
+   ${fotoField('c_',c?fkey('cont',c.id):null)}
    <button class="btn pr" id="c_save">Guardar</button>${c?`<button class="btn dg" id="c_del">Eliminar contenedor</button>`:''}<button class="btn" id="c_no">Cancelar</button>`;
   openSheet(html);
   const root=$('#sheetBody');
   root.querySelectorAll('#c_tipo,#c_nivel').forEach(g=>g.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;g.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));if(g.id==='c_nivel')$('#c_padre').innerHTML='<option value="">— No, va directo en el estante —</option>'+S.conts.filter(x=>x.nivel===b.dataset.v&&!x.padre&&(!c||x.id!==c.id)&&x.tipo!=='Suelto').map(p=>`<option>${esc(p.nombre)}</option>`).join('')}));
-  $('#c_no').onclick=()=>{if(nested&&onCancel)onCancel();else closeSheet()};
+  $('#c_no').onclick=()=>{delete FOTO.pend.c_;if(nested&&onCancel)onCancel();else closeSheet()};
   if(c)$('#c_del').onclick=()=>{const n=itemsIn(c).length,k=S.conts.some(x=>x.nivel===c.nivel&&x.padre===c.nombre);if(n||k){toast(`No se puede: tiene ${n} artículo(s)${k?' y contenedores dentro':''}. Muévelos primero.`,null,'wa');return}
-    confirmSheet('Eliminar contenedor',`¿Eliminar “${c.nombre}”?`,'Eliminar',()=>{S.conts=S.conts.filter(x=>x!==c);reindexConts();DB.del('conts',c.id);refresh();toast('Contenedor eliminado')})};
+    confirmSheet('Eliminar contenedor',`¿Eliminar “${c.nombre}”?`,'Eliminar',()=>{S.conts=S.conts.filter(x=>x!==c);reindexConts();DB.del('conts',c.id);delFoto(fkey('cont',c.id));refresh();toast('Contenedor eliminado')})};
   $('#c_save').onclick=()=>{
     const nombre=$('#c_nombre').value.trim(),tipo=root.querySelector('#c_tipo .on').dataset.v,niv=root.querySelector('#c_nivel .on').dataset.v,padre=$('#c_padre').value||null;
     if(!nombre){toast('Escribe el nombre del contenedor',null,'wa');return}
@@ -782,8 +854,9 @@ function contEditor(cid,nivel,after,opts){
       reindexConts();const ch=[...own,...kidItems];ch.forEach(prep);DB.put('conts',[c,...kids]);if(ch.length)DB.put('items',ch);out=c;
     }else{out={id:uid(),nivel:niv,nombre,tipo,padre,orden:S.conts.length};S.conts.push(out);reindexConts();DB.put('conts',out)}
     toast(c?'Contenedor actualizado':`Contenedor creado en ${niv}`);
+    const fp=applyPend('c_',fkey('cont',out.id));
     if(nested&&after){after(out);return}
-    closeSheet();if(after)after(out);else refresh();
+    closeSheet();if(after)after(out);else fp.then(refresh);
   };
 }
 
@@ -821,15 +894,18 @@ $('#subbar').addEventListener('click',e=>{
 document.addEventListener('click',e=>{
   const st=e.target.closest('[data-step]');
   if(st){const inp=document.getElementById(st.dataset.step);inp.value=fmt(Math.max(0,(parseFloat(inp.value)||0)+(+st.dataset.d)));return}
+  const fb=e.target.closest('[data-foto]');if(fb){onFotoBtn(fb);return}
   const a=e.target.closest('[data-act]');if(!a)return;
   const act=a.dataset.act,row=a.closest('.it'),id=row&&row.dataset.id;
   switch(act){
     case 'dec':bump(id,-1);break;
     case 'inc':bump(id,1);break;
     case 'edit':editSheet(id);break;
+    case 'vfi':{const it=byId(id);if(it)verFoto(fkey('item',id),it.nombre,locTxt(it));break}
+    case 'vfc':{const c=S.conts.find(x=>x.id===a.closest('.cont').dataset.cid);if(c)verFoto(fkey('cont',c.id),c.nombre,`${c.nivel}${c.padre?' › '+esc(c.padre):''}`);break}
     case 'comprado':compradoSheet(id);break;
     case 'toggle':{const k=a.closest('.cont').dataset.cid;S.col[k]=!S.col[k];lsSet('ci_col',S.col);a.closest('.cont').classList.toggle('col');break}
-    case 'addin':{const c=S.conts.find(x=>x.id===a.closest('.cont').dataset.cid);S.alta=null;altaDefaults({nivel:c.nivel,contenedor:c.nombre});go('alta');setTimeout(()=>$('#a_nombre').focus(),40);break}
+    case 'addin':{const c=S.conts.find(x=>x.id===a.closest('.cont').dataset.cid);S.alta=null;delete FOTO.pend.a_;altaDefaults({nivel:c.nivel,contenedor:c.nombre});go('alta');setTimeout(()=>$('#a_nombre').focus(),40);break}
     case 'altaq':{const n=S.q.trim();S.q='';qIn.value='';$('#sbox').classList.remove('has');S.alta=null;altaDefaults({nombre:n});go('alta');break}
     case 'altasave':doAlta(false);break;
     case 'altamore':doAlta(true);break;
@@ -852,7 +928,7 @@ function fallbackCopy(t,ok){const ta=document.createElement('textarea');ta.value
 $('#fileIn').addEventListener('change',e=>{const f=e.target.files[0];if(f)importJSON(f);e.target.value=''});
 
 /* ---------- PWA: instalación, actualización, estado de red ---------- */
-const APP_VERSION='2.0.0';
+const APP_VERSION='3.0.0';
 let deferredInstall=null,swReg=null;
 const isStandalone=()=>matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
 const isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
@@ -878,12 +954,13 @@ function appCard(){
 }
 function netUI(){$('#net').classList.toggle('hide',navigator.onLine)}
 addEventListener('online',()=>{netUI();toast('Conexión recuperada')});addEventListener('offline',()=>{netUI();toast('Sin conexión: la app sigue funcionando normal',null,'wa')});
-function showUpdate(w){$('#upd').classList.add('show');$('#updBtn').onclick=()=>{$('#upd').classList.remove('show');w.postMessage('skipWaiting')}}
+let wantReload=false;
+function showUpdate(w){$('#upd').classList.add('show');$('#updBtn').onclick=()=>{$('#upd').classList.remove('show');wantReload=true;w.postMessage('skipWaiting');setTimeout(()=>location.reload(),2500)}}
 async function checkUpdate(){if(!swReg){toast('El modo app aún no está activo',null,'wa');return}if(!navigator.onLine){toast('Necesitas internet para buscar actualizaciones',null,'wa');return}
   try{await swReg.update();if(swReg.waiting||swReg.installing)toast('Descargando versión nueva…');else toast('Ya tienes la versión más reciente ✔')}catch(e){toast('No se pudo revisar: '+e.message,null,'ba')}}
 if('serviceWorker' in navigator&&isHttp){
-  const hadCtrl=!!navigator.serviceWorker.controller;let reloaded=false;
-  navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!hadCtrl||reloaded)return;reloaded=true;location.reload()});
+  let reloaded=false; // solo recarga cuando el usuario tocó "Actualizar" (no en la primera instalación)
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!wantReload||reloaded)return;reloaded=true;location.reload()});
   window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').then(reg=>{swReg=reg;
     if(reg.waiting&&navigator.serviceWorker.controller)showUpdate(reg.waiting);
     reg.addEventListener('updatefound',()=>{const w=reg.installing;if(!w)return;w.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)showUpdate(w);if(w.state==='activated'&&S.view==='mas')renderMas()})});
